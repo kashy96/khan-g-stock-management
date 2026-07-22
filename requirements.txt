@@ -1,0 +1,11 @@
+# Core runtime dependency (location photos). tkinter and sqlite3 ship with
+# Python itself and are not listed here.
+pillow>=10.0
+
+# Only needed if you switch config.json to "engine": "mysql" (shared LAN
+# database on the shop's main PC). Not needed for the default SQLite mode.
+# pymysql>=1.1
+
+# Only needed on this development machine to rebuild dist\KHAN_G_Stock.exe.
+# Never needed at runtime, and not needed on shop PCs that just run the exe.
+# pyinstaller>=6.0

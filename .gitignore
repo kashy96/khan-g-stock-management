@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build output
+build/
+dist/
+
+# Local runtime data / secrets (created automatically, contains shop data + DB credentials)
+config.json
+*.db
+*.sqlite
+*.sqlite3

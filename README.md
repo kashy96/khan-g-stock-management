@@ -28,7 +28,7 @@ it — no Python, no installer, nothing else required.
 On first run it creates `config.json` and a local database file
 `khan_g_stock.db` right next to the .exe.
 
-If you later change `main.py` or `db.py` (or ask Claude to), rebuild the
+If you later change `main.py` or `db.py`, rebuild the
 .exe by double-clicking **`build_exe.bat`** — it takes under a minute and
 overwrites `dist\KHAN_G_Stock.exe` with the new version. This machine needs
 Python + `pip install pyinstaller pillow` to build it, but the resulting

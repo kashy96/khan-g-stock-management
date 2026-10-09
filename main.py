@@ -29,14 +29,18 @@ PERIODS = ["Today", "Yesterday", "This Week", "Last Week",
 C = {
     "sidebar":        "#0f172a",
     "sidebar_hover":  "#1e293b",
-    "sidebar_active": "#1e293b",
+    "sidebar_active": "#242e45",
     "sidebar_text":   "#94a3b8",
     "sidebar_bright": "#f8fafc",
     "accent":         "#4f46e5",
     "accent_dark":    "#4338ca",
-    "bg":             "#eef2f7",
+    "accent_press":   "#3730a3",
+    "bg":             "#f2f3f6",
     "card":           "#ffffff",
-    "border":         "#dbe2ea",
+    "border":         "#e3e6ec",
+    "shadow":         "#d9dce3",
+    "ghost_hover":    "#eef0fb",
+    "ghost_press":    "#e1e5f9",
     "text":           "#0f172a",
     "muted":          "#64748b",
     "green":          "#16a34a",
@@ -92,10 +96,18 @@ def setup_styles(root):
     style.configure("TLabel", background=C["bg"], foreground=C["text"])
     style.configure("TEntry", fieldbackground="white", bordercolor=C["border"],
                     lightcolor=C["border"], darkcolor=C["border"], padding=5)
+    style.map("TEntry",
+              bordercolor=[("focus", C["accent"])],
+              lightcolor=[("focus", C["accent"])],
+              darkcolor=[("focus", C["accent"])])
     style.configure("TCombobox", fieldbackground="white", bordercolor=C["border"],
                     lightcolor=C["border"], darkcolor=C["border"], padding=4,
                     arrowcolor=C["muted"])
-    style.map("TCombobox", fieldbackground=[("readonly", "white")])
+    style.map("TCombobox",
+              fieldbackground=[("readonly", "white")],
+              bordercolor=[("focus", C["accent"])],
+              lightcolor=[("focus", C["accent"])],
+              darkcolor=[("focus", C["accent"])])
     style.configure("Treeview", background="white", fieldbackground="white",
                     foreground=C["text"], rowheight=30, font=F["body"],
                     borderwidth=0, relief="flat")
@@ -106,50 +118,180 @@ def setup_styles(root):
     style.map("Treeview",
               background=[("selected", "#e0e7ff")],
               foreground=[("selected", C["text"])])
-    style.configure("Vertical.TScrollbar", background="#cbd5e1",
+    # Windows 11 style scrollbars: slim, no arrow buttons, just a soft thumb.
+    style.configure("Vertical.TScrollbar", background="#c7cbd3",
                     troughcolor=C["bg"], bordercolor=C["bg"],
-                    arrowcolor=C["muted"])
-    style.configure("Horizontal.TScrollbar", background="#cbd5e1",
+                    arrowcolor=C["bg"], width=11)
+    style.configure("Horizontal.TScrollbar", background="#c7cbd3",
                     troughcolor=C["bg"], bordercolor=C["bg"],
-                    arrowcolor=C["muted"])
+                    arrowcolor=C["bg"], width=11)
+    style.map("Vertical.TScrollbar", background=[("active", "#a6acb8")])
+    style.map("Horizontal.TScrollbar", background=[("active", "#a6acb8")])
+    try:
+        style.layout("Vertical.TScrollbar", [
+            ("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+        style.layout("Horizontal.TScrollbar", [
+            ("Horizontal.Scrollbar.trough", {"sticky": "ew", "children": [
+                ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+    except tk.TclError:
+        pass
 
 
 # ------------------------------------------------------------- ui helpers ----
 
+def _widget_bg(widget, default=None):
+    try:
+        return widget["bg"]
+    except (tk.TclError, KeyError):
+        return default or C["bg"]
+
+
+def round_rect_points(x0, y0, x1, y1, r):
+    """Point list for a smoothed (rounded-corner) canvas polygon."""
+    r = max(0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    return [
+        x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+        x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+        x0, y1, x0, y1 - r, x0, y0 + r, x0, y0,
+    ]
+
+
+class RoundedButton(tk.Canvas):
+    """A Windows 11 style pill/rounded-rect button, drawn on a Canvas so it
+    can have real rounded corners (plain tk.Button can't). Supports the same
+    hover/press color feedback as the buttons it replaces, and re-flows
+    cleanly when packed with fill='x'."""
+
+    def __init__(self, parent, text, command=None, radius=9, bg=None, fg="white",
+                 font=None, padx=16, pady=7, hover=None, press=None, outline=False,
+                 backdrop=None):
+        super().__init__(parent, bg=backdrop or _widget_bg(parent),
+                         highlightthickness=0, bd=0)
+        self.command = command
+        self.radius = radius
+        self.fill = bg or C["accent"]
+        self.hover_fill = hover or C["accent_dark"]
+        self.press_fill = press or C["accent_press"]
+        self.fg = fg
+        self.font = font or F["nav"]
+        self.outline = outline
+        self.enabled = True
+
+        probe = tk.Label(self, text=text, font=self.font)
+        probe.update_idletasks()
+        self._min_w = probe.winfo_reqwidth() + padx * 2
+        self._min_h = probe.winfo_reqheight() + pady * 2
+        probe.destroy()
+        self.configure(width=self._min_w, height=self._min_h)
+
+        self.shape = self.create_polygon(
+            round_rect_points(1, 1, self._min_w - 1, self._min_h - 1, radius),
+            smooth=True, fill=self.fill,
+            outline=C["border"] if outline else self.fill, width=1)
+        self.label = self.create_text(self._min_w / 2, self._min_h / 2, text=text,
+                                      fill=fg, font=self.font)
+
+        self.bind("<Configure>", self._reflow)
+        self.bind("<Enter>", lambda e: self._paint(self.hover_fill))
+        self.bind("<Leave>", lambda e: self._paint(self.fill))
+        self.bind("<ButtonPress-1>", lambda e: self._paint(self.press_fill))
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.configure(cursor="hand2")
+
+    def _reflow(self, _event=None):
+        w = max(self.winfo_width(), self._min_w)
+        h = max(self.winfo_height(), self._min_h)
+        self.coords(self.shape, *round_rect_points(1, 1, w - 1, h - 1, self.radius))
+        self.coords(self.label, w / 2, h / 2)
+
+    def _paint(self, color):
+        if not self.enabled:
+            return
+        self.itemconfig(self.shape, fill=color,
+                        outline=C["border"] if self.outline else color)
+
+    def _on_release(self, event):
+        if not self.enabled:
+            return
+        inside = 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height()
+        self._paint(self.hover_fill if inside else self.fill)
+        if inside and self.command:
+            self.command()
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        self.configure(cursor="hand2" if enabled else "arrow")
+        self._paint(self.fill if enabled else C["border"])
+
+
 def flat_button(parent, text, command, bg=None, fg="white", font=None,
                 padx=16, pady=7, hover=None):
-    bg = bg or C["accent"]
-    hover = hover or C["accent_dark"]
-    btn = tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
-                    font=font or F["nav"], relief="flat", bd=0,
-                    activebackground=hover, activeforeground=fg,
-                    cursor="hand2", padx=padx, pady=pady)
-    btn.bind("<Enter>", lambda e: btn.config(bg=hover))
-    btn.bind("<Leave>", lambda e: btn.config(bg=bg))
-    return btn
+    return RoundedButton(parent, text, command, bg=bg, fg=fg, font=font,
+                         padx=padx, pady=pady, hover=hover)
 
 
 def ghost_button(parent, text, command, padx=14, pady=6):
-    btn = tk.Button(parent, text=text, command=command, bg="white",
-                    fg=C["accent"], font=F["nav"], relief="flat", bd=0,
-                    activebackground="#eef2ff", activeforeground=C["accent"],
-                    cursor="hand2", padx=padx, pady=pady,
-                    highlightthickness=1, highlightbackground=C["border"])
-    btn.bind("<Enter>", lambda e: btn.config(bg="#eef2ff"))
-    btn.bind("<Leave>", lambda e: btn.config(bg="white"))
-    return btn
+    return RoundedButton(parent, text, command, bg=C["card"], fg=C["accent"],
+                         font=F["nav"], padx=padx, pady=pady,
+                         hover=C["ghost_hover"], press=C["ghost_press"],
+                         outline=True)
+
+
+class RoundedCard(tk.Canvas):
+    """Windows 11 style elevated card: rounded corners + a soft offset shadow.
+    Pack/grid children into `.body` (a plain white Frame); the card auto-sizes
+    to its content exactly like a Frame would when not stretched by fill/expand."""
+
+    def __init__(self, parent, radius=12, pad=14, accent=None, **kwargs):
+        outer_bg = kwargs.pop("bg", None) or _widget_bg(parent)
+        super().__init__(parent, bg=outer_bg, highlightthickness=0, bd=0, **kwargs)
+        self.radius = radius
+        self.accent = accent
+        self.body = tk.Frame(self, bg=C["card"])
+        leftpad = pad + (9 if accent else 0)
+        self.body.pack(fill="both", expand=True,
+                       padx=(leftpad, pad + 3), pady=(pad, pad + 4))
+        self.bind("<Configure>", self._redraw)
+
+    def _redraw(self, _event=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.delete("shape")
+        self.create_polygon(round_rect_points(3, 4, w - 1, h - 1, self.radius),
+                            smooth=True, fill=C["shadow"], outline="", tags="shape")
+        self.create_polygon(round_rect_points(1, 1, w - 3, h - 3, self.radius),
+                            smooth=True, fill=C["card"], outline=C["border"],
+                            width=1, tags="shape")
+        if self.accent:
+            self.create_polygon(round_rect_points(1, 7, 6, h - 10, 3),
+                                smooth=True, fill=self.accent, outline="",
+                                tags="shape")
+        self.tag_lower("shape")
 
 
 def card_frame(parent, **kwargs):
-    return tk.Frame(parent, bg=C["card"], highlightthickness=1,
-                    highlightbackground=C["border"], **kwargs)
+    return RoundedCard(parent, **kwargs)
+
+
+def rounded_badge(parent, text, size=40, radius=11, bg=None, fg="white", font=None):
+    """A small rounded-square tile, used for the 'KG' brand mark."""
+    bg = bg or C["accent"]
+    c = tk.Canvas(parent, width=size, height=size, bg=_widget_bg(parent),
+                 highlightthickness=0, bd=0)
+    c.create_polygon(round_rect_points(1, 1, size - 1, size - 1, radius),
+                     smooth=True, fill=bg, outline=bg)
+    c.create_text(size / 2, size / 2, text=text, fill=fg,
+                 font=font or ("Segoe UI", max(int(size * 0.34), 8), "bold"))
+    return c
 
 
 def _resize_tree_columns(tree, wrapper_width):
     """Scale Treeview columns to fit the wrapper, or keep minimum widths + scroll."""
     columns = getattr(tree, "_table_columns", [])
     tree_col = getattr(tree, "_table_tree_col", None)
-    available = max(wrapper_width - 22, 60)
+    available = max(wrapper_width - 40, 60)
 
     specs = []
     if tree_col:
@@ -234,12 +376,12 @@ def pack_split_view(body, table_wrap, side_panel=None, panel_padx=(12, 0)):
 
 def side_panel(parent, width=270, padx=16, pady=14):
     """Fixed-width side panel with vertical scroll for tall forms."""
-    panel = card_frame(parent, width=width)
+    panel = card_frame(parent, width=width, pad=6)
     panel.pack_propagate(False)
 
-    canvas = tk.Canvas(panel, bg=C["card"], highlightthickness=0, bd=0)
+    canvas = tk.Canvas(panel.body, bg=C["card"], highlightthickness=0, bd=0)
     # Use the same ttk scrollbar used by tables so it looks identical
-    yscroll = ttk.Scrollbar(panel, orient="vertical", command=canvas.yview)
+    yscroll = ttk.Scrollbar(panel.body, orient="vertical", command=canvas.yview)
 
     pad = tk.Frame(canvas, bg=C["card"], padx=padx, pady=pady)
     pad_id = canvas.create_window((0, 0), window=pad, anchor="nw")
@@ -301,10 +443,11 @@ def side_panel(parent, width=270, padx=16, pady=14):
         except Exception:
             pass
 
-    btn = tk.Button(panel, text="▼", command=_scroll_to_bottom,
-                    bg=C["accent"], fg="white", relief="flat", bd=0,
-                    cursor="hand2", padx=6, pady=2)
-    btn.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
+    btn = RoundedButton(panel, "▼", _scroll_to_bottom, radius=13, bg=C["card"],
+                        fg=C["accent"], hover=C["ghost_hover"],
+                        press=C["ghost_press"], outline=True, padx=7, pady=4,
+                        backdrop=C["card"])
+    btn.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
     # Add an 'up' button to jump to the top of the panel
     def _scroll_to_top():
         try:
@@ -312,19 +455,19 @@ def side_panel(parent, width=270, padx=16, pady=14):
         except Exception:
             pass
 
-    btn_up = tk.Button(panel, text="▲", command=_scroll_to_top,
-                       bg=C["accent"], fg="white", relief="flat", bd=0,
-                       cursor="hand2", padx=6, pady=2)
-    btn_up.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-36)
+    btn_up = RoundedButton(panel, "▲", _scroll_to_top, radius=13, bg=C["card"],
+                           fg=C["accent"], hover=C["ghost_hover"],
+                           press=C["ghost_press"], outline=True, padx=7, pady=4,
+                           backdrop=C["card"])
+    btn_up.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-42)
     return panel, pad
 
 
 def make_table(parent, columns, tree_col=None, height=None):
     """columns: list of (key, heading, width, anchor). Returns (wrapper, tree).
     tree_col: (heading, width) to enable the hierarchy column #0."""
-    wrapper = card_frame(parent)
-    inner = tk.Frame(wrapper, bg=C["card"])
-    inner.pack(fill="both", expand=True, padx=1, pady=1)
+    wrapper = card_frame(parent, pad=8)
+    inner = wrapper.body
     inner.grid_rowconfigure(0, weight=1)
     inner.grid_columnconfigure(0, weight=1)
 
@@ -385,34 +528,74 @@ def form_field(parent, label, row, show=None, width=22):
     return var, entry
 
 
+def password_field(parent, label, row, width=22):
+    """Like form_field, but masked with a Windows 11 style SHOW/HIDE toggle
+    overlaid on the right edge of the entry."""
+    tk.Label(parent, text=label, bg=C["card"], fg=C["muted"],
+             font=F["small"]).grid(row=row, column=0, sticky="w", pady=(6, 1))
+    var = tk.StringVar()
+    entry = ttk.Entry(parent, textvariable=var, show="•", width=width, font=F["body"])
+    entry.grid(row=row + 1, column=0, sticky="ew", pady=(0, 2))
+
+    state = {"visible": False}
+    toggle = tk.Label(parent, text="SHOW", bg="white", fg=C["muted"],
+                      font=("Segoe UI", 8, "bold"), cursor="hand2")
+    toggle.place(in_=entry, relx=1.0, rely=0.5, anchor="e", x=-6)
+
+    def set_visible(visible):
+        state["visible"] = visible
+        entry.config(show="" if visible else "•")
+        toggle.config(text="HIDE" if visible else "SHOW",
+                      fg=C["accent"] if visible else C["muted"])
+
+    toggle.bind("<Button-1>", lambda e: set_visible(not state["visible"]))
+    toggle.bind("<Enter>", lambda e: toggle.config(fg=C["accent"]))
+    toggle.bind("<Leave>", lambda e: toggle.config(
+        fg=C["accent"] if state["visible"] else C["muted"]))
+    return var, entry
+
+
 def stat_card(parent, title, accent):
-    frame = card_frame(parent)
-    bar = tk.Frame(frame, bg=accent, width=5)
-    bar.pack(side="left", fill="y")
-    inner = tk.Frame(frame, bg=C["card"])
-    inner.pack(side="left", fill="both", expand=True, padx=14, pady=10)
-    tk.Label(inner, text=title.upper(), bg=C["card"], fg=C["muted"],
+    frame = card_frame(parent, radius=10, pad=12, accent=accent)
+    tk.Label(frame.body, text=title.upper(), bg=C["card"], fg=C["muted"],
              font=("Segoe UI", 8, "bold")).pack(anchor="w")
-    value = tk.Label(inner, text="-", bg=C["card"], fg=C["text"], font=F["stat"])
+    value = tk.Label(frame.body, text="-", bg=C["card"], fg=C["text"], font=F["stat"])
     value.pack(anchor="w")
     return frame, value
 
 
 # ---------------------------------------------------------------- login ----
 
+def _blend(base, rgb, alpha):
+    """Mix an RGB color into a base RGB by alpha (0-1); Tk canvas stipple is
+    a no-op on Windows, so soft/translucent glows are faked this way."""
+    r, g, b = (int(base[i] * (1 - alpha) + rgb[i] * alpha) for i in range(3))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 class LoginView(tk.Frame):
+    BG_RGB = (15, 23, 42)     # matches C["sidebar"] #0f172a
+    GLOWS = [  # (relcx, relcy, relmax_radius, rgb) — soft accent glows
+        (0.08, 0.16, 0.34, (79, 70, 229)),    # top-left indigo (accent)
+        (0.95, 0.90, 0.42, (13, 148, 136)),   # bottom-right teal
+        (0.52, -0.05, 0.28, (49, 46, 129)),   # top-center violet
+    ]
+
     def __init__(self, master, db, on_success):
         super().__init__(master, bg=C["sidebar"])
         self.db = db
         self.on_success = on_success
 
-        card = tk.Frame(self, bg=C["card"], padx=44, pady=36,
-                        highlightthickness=0)
-        card.place(relx=0.5, rely=0.46, anchor="center")
+        self.bg_canvas = tk.Canvas(self, bg=C["sidebar"], highlightthickness=0, bd=0)
+        self.bg_canvas.pack(fill="both", expand=True)
+        self.bg_canvas.bind("<Configure>", self._draw_background)
 
-        logo = tk.Label(card, text="KG", bg=C["accent"], fg="white",
-                        font=("Segoe UI", 18, "bold"), width=4, pady=8)
-        logo.pack(pady=(0, 14))
+        outer = card_frame(self, radius=18, pad=30)
+        outer.place(relx=0.5, rely=0.46, anchor="center")
+        card = outer.body
+
+        rounded_badge(card, "KG", size=56, radius=15,
+                     font=("Segoe UI", 19, "bold")).pack(pady=(0, 14))
         tk.Label(card, text=SHOP_NAME, bg=C["card"], fg=C["text"],
                  font=F["brand"]).pack()
         tk.Label(card, text="Stock & Inventory ERP", bg=C["card"],
@@ -421,7 +604,7 @@ class LoginView(tk.Frame):
         form = tk.Frame(card, bg=C["card"])
         form.pack(fill="x")
         self.username_var, entry_user = form_field(form, "USERNAME", 0, width=28)
-        self.password_var, _ = form_field(form, "PASSWORD", 2, show="*", width=28)
+        self.password_var, _ = password_field(form, "PASSWORD", 2, width=28)
         form.columnconfigure(0, weight=1)
 
         self.error = tk.Label(card, text=" ", bg=C["card"], fg=C["red"],
@@ -436,6 +619,39 @@ class LoginView(tk.Frame):
         entry_user.focus_set()
         self.winfo_toplevel().bind("<Return>", lambda e: self.login())
 
+    def _draw_background(self, _event=None):
+        """Windows 11 style login backdrop: soft glow blobs + a faint brand
+        watermark + a sparse dot texture, all drawn on a Canvas since there
+        are no image assets to rely on."""
+        c = self.bg_canvas
+        c.delete("bg")
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 4 or h < 4:
+            return
+
+        for rel_cx, rel_cy, rel_r, rgb in self.GLOWS:
+            cx, cy = rel_cx * w, rel_cy * h
+            r_max = rel_r * max(w, h)
+            layers = 6
+            for i in range(layers, 0, -1):
+                frac = i / layers
+                r = r_max * frac
+                alpha = 0.05 + 0.09 * (1 - frac)
+                color = _blend(self.BG_RGB, rgb, alpha)
+                c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=color,
+                              outline="", tags="bg")
+
+        step = 42
+        for gx in range(step // 2, w, step):
+            for gy in range(step // 2, h, step):
+                c.create_oval(gx, gy, gx + 1.6, gy + 1.6, fill="#1e293b",
+                              outline="", tags="bg")
+
+        c.create_text(w * 0.16, h * 0.5, text=SHOP_NAME.upper(), angle=90,
+                      anchor="center", font=("Segoe UI", 54, "bold"),
+                      fill="#16213e", tags="bg")
+        c.tag_lower("bg")
+
     def login(self):
         user = self.db.verify_user(self.username_var.get().strip(),
                                    self.password_var.get())
@@ -448,22 +664,39 @@ class LoginView(tk.Frame):
 
 # --------------------------------------------------------------- sidebar ----
 
-class SidebarItem(tk.Frame):
+class SidebarItem(tk.Canvas):
+    """A Windows 11 NavigationView style nav row: a rounded highlight pill
+    behind the whole row on hover/active, plus a short accent indicator pill
+    on the left when active."""
+
+    HEIGHT = 40
+
     def __init__(self, master, icon, text, command):
-        super().__init__(master, bg=C["sidebar"], cursor="hand2")
+        super().__init__(master, bg=C["sidebar"], height=self.HEIGHT,
+                         highlightthickness=0, bd=0, cursor="hand2")
         self.command = command
         self.active = False
-        self.indicator = tk.Frame(self, bg=C["sidebar"], width=4)
-        self.indicator.pack(side="left", fill="y")
-        self.label = tk.Label(self, text=f"  {icon}   {text}", bg=C["sidebar"],
-                              fg=C["sidebar_text"], font=F["nav"], anchor="w",
-                              padx=10, pady=11)
-        self.label.pack(side="left", fill="x", expand=True)
-        for widget in (self, self.label, self.indicator):
-            widget.bind("<Button-1>", lambda e: self.command())
-            widget.bind("<Enter>", lambda e: self._paint(hover=True))
-            widget.bind("<Leave>", lambda e: self._paint(hover=False))
+        start = round_rect_points(10, 3, 215, self.HEIGHT - 3, 9)
+        self.shape = self.create_polygon(start, smooth=True, tags="shape")
+        self.dot = self.create_polygon(
+            round_rect_points(10, self.HEIGHT / 2 - 8, 14, self.HEIGHT / 2 + 8, 2),
+            smooth=True, tags="dot")
+        self.label = self.create_text(34, self.HEIGHT / 2, anchor="w",
+                                      text=f"{icon}   {text}", font=F["nav"])
+
+        self.bind("<Configure>", self._layout)
+        self.bind("<Button-1>", lambda e: self.command())
+        self.bind("<Enter>", lambda e: self._paint(hover=True))
+        self.bind("<Leave>", lambda e: self._paint(hover=False))
+        self._layout()
         self._paint()
+
+    def _layout(self, _event=None):
+        w = self.winfo_width() or 225
+        h = self.winfo_height() or self.HEIGHT
+        self.coords(self.shape, *round_rect_points(10, 3, w - 10, h - 3, 9))
+        self.coords(self.dot, *round_rect_points(10, h / 2 - 8, 14, h / 2 + 8, 2))
+        self.coords(self.label, 34, h / 2)
 
     def set_active(self, active):
         self.active = active
@@ -471,14 +704,14 @@ class SidebarItem(tk.Frame):
 
     def _paint(self, hover=False):
         if self.active:
-            bg, fg, ind = C["sidebar_active"], C["sidebar_bright"], C["accent"]
+            shape, fg, dot = C["sidebar_active"], C["sidebar_bright"], C["accent"]
         elif hover:
-            bg, fg, ind = C["sidebar_hover"], C["sidebar_bright"], C["sidebar_hover"]
+            shape, fg, dot = C["sidebar_hover"], C["sidebar_bright"], C["sidebar_hover"]
         else:
-            bg, fg, ind = C["sidebar"], C["sidebar_text"], C["sidebar"]
-        self.config(bg=bg)
-        self.label.config(bg=bg, fg=fg)
-        self.indicator.config(bg=ind)
+            shape, fg, dot = C["sidebar"], C["sidebar_text"], C["sidebar"]
+        self.itemconfig(self.shape, fill=shape, outline=shape)
+        self.itemconfig(self.dot, fill=dot, outline=dot)
+        self.itemconfig(self.label, fill=fg)
 
 
 class Sidebar(tk.Frame):
@@ -490,8 +723,8 @@ class Sidebar(tk.Frame):
 
         brand = tk.Frame(self, bg=C["sidebar"])
         brand.pack(fill="x", pady=(22, 6), padx=18)
-        tk.Label(brand, text="KG", bg=C["accent"], fg="white",
-                 font=("Segoe UI", 13, "bold"), width=3, pady=4).pack(side="left")
+        rounded_badge(brand, "KG", size=36, radius=10,
+                     font=("Segoe UI", 12, "bold")).pack(side="left")
         text = tk.Frame(brand, bg=C["sidebar"])
         text.pack(side="left", padx=10)
         tk.Label(text, text="KHAN G", bg=C["sidebar"], fg="white",
@@ -967,8 +1200,7 @@ class StockPage(tk.Frame):
 
         panel = card_frame(self)
         panel.pack(fill="x", padx=18, pady=(16, 10))
-        pad = tk.Frame(panel, bg=C["card"])
-        pad.pack(fill="x", padx=16, pady=14)
+        pad = panel.body
 
         section_title(pad, "Record stock movement").grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
@@ -1111,8 +1343,7 @@ class LocationsPage(tk.Frame):
         # -- right: details of the selected location (packed first so it keeps space)
         right = card_frame(body)
         right.pack(side="right", fill="both", expand=True)
-        pad = tk.Frame(right, bg=C["card"])
-        pad.pack(fill="both", expand=True, padx=16, pady=14)
+        pad = right.body
 
         self.loc_title = white_label(pad, "Select a location", font=F["h1"])
         self.loc_title.pack(anchor="w")
@@ -1140,19 +1371,20 @@ class LocationsPage(tk.Frame):
         list_wrap, self.loc_tree = make_table(left, [
             ("name", "Location", 120, "w"), ("items", "Items", 50, "center"),
             ("units", "Units", 55, "center"), ("photo", "Photo", 45, "center")])
-        list_wrap.pack(fill="both", expand=True)
         self.loc_tree.bind("<<TreeviewSelect>>", self.on_select)
 
         if self.is_admin:
             self._build_editor(left)
+        list_wrap.pack(side="top", fill="both", expand=True)
 
     # -- admin editor ------------------------------------------------------------
 
     def _build_editor(self, left):
-        editor = card_frame(left)
-        editor.pack(fill="x", pady=(10, 0))
-        pad = tk.Frame(editor, bg=C["card"])
-        pad.pack(fill="x", padx=14, pady=12)
+        panel, pad = side_panel(left, width=280, padx=14, pady=12)
+        panel.configure(height=280)
+        # packed before the location list (side="bottom") so it always keeps
+        # its space and its buttons are never clipped off the bottom of the window
+        panel.pack(side="bottom", fill="x", pady=(10, 0))
 
         section_title(pad, "Location details").pack(anchor="w")
         form = tk.Frame(pad, bg=C["card"])
